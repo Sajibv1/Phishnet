@@ -18,6 +18,9 @@ export default {
       },
     },
     extend: {
+      fontFamily: {
+        mono: ['"JetBrains Mono"', "ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
+      },
       colors: {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
@@ -62,6 +65,16 @@ export default {
           border: "hsl(var(--sidebar-border))",
           ring: "hsl(var(--sidebar-ring))",
         },
+        void: "#04080a",
+        panel: "#0a1114",
+        raise: "#0d171b",
+        edge: "#17262c",
+        neon: "#00ff9c",
+        tox: "#ff4d6a",
+        warn: "#ffb454",
+        ice: "#53d8ff",
+        dim: "#6d8880",
+        fog: "#d3e6dc",
       },
       borderRadius: {
         lg: "var(--radius)",
@@ -70,25 +83,37 @@ export default {
       },
       keyframes: {
         "accordion-down": {
-          from: {
-            height: "0",
-          },
-          to: {
-            height: "var(--radix-accordion-content-height)",
-          },
+          from: { height: "0" },
+          to: { height: "var(--radix-accordion-content-height)" },
         },
         "accordion-up": {
-          from: {
-            height: "var(--radix-accordion-content-height)",
-          },
-          to: {
-            height: "0",
-          },
+          from: { height: "var(--radix-accordion-content-height)" },
+          to: { height: "0" },
+        },
+        blink: {
+          "0%,100%": { opacity: "1" },
+          "50%": { opacity: "0" },
+        },
+        "fade-up": {
+          from: { opacity: "0", transform: "translateY(14px)" },
+          to: { opacity: "1", transform: "translateY(0)" },
+        },
+        sweep: {
+          "0%": { top: "-4%" },
+          "100%": { top: "104%" },
+        },
+        "pulse-dot": {
+          "0%,100%": { opacity: "1", transform: "scale(1)" },
+          "50%": { opacity: "0.35", transform: "scale(0.8)" },
         },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
+        blink: "blink 1.1s step-end infinite",
+        "fade-up": "fade-up 0.5s ease-out both",
+        sweep: "sweep 1.5s linear infinite",
+        "pulse-dot": "pulse-dot 1.8s ease-in-out infinite",
       },
     },
   },
