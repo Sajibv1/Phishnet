@@ -11,6 +11,7 @@ import TipsSection from "@/components/TipsSection";
 import { useScanHistory } from "@/hooks/useScanHistory";
 import {
   analyze,
+  applyPageFindings,
   buildScanLogs,
   parseTarget,
   type LogLine,
