@@ -1,9 +1,11 @@
 import { useRef, useState, type ReactNode } from "react";
 import { History, Lightbulb, Radar } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import ScannerForm from "@/components/ScannerForm";
 import TerminalOutput from "@/components/TerminalOutput";
 import VerdictCard from "@/components/VerdictCard";
 import RiskBreakdown from "@/components/RiskBreakdown";
+import SandboxPanel from "@/components/SandboxPanel";
 import ScanHistoryPanel from "@/components/ScanHistoryPanel";
 import TipsSection from "@/components/TipsSection";
 import { useScanHistory } from "@/hooks/useScanHistory";
@@ -14,6 +16,7 @@ import {
   type LogLine,
   type ScanResult,
 } from "@/lib/phishingEngine";
+import { analyzePage, fetchPageHtml, summarizeFindings } from "@/lib/pageScanner";
 
 type Phase = "idle" | "scanning" | "done";
 
@@ -34,6 +37,7 @@ export default function Index() {
   const [logs, setLogs] = useState<LogLine[]>([]);
   const [result, setResult] = useState<ScanResult | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [deepScan, setDeepScan] = useState(true);
   const { items: history, add: addScan, clear: clearHistory } = useScanHistory();
   const resultRef = useRef<HTMLDivElement>(null);
   const scanSeq = useRef(0);
@@ -57,6 +61,7 @@ export default function Index() {
     setLogs([]);
     setResult(null);
 
+    // stage 1 — structural analysis (fully offline)
     const res = analyze(parsed, input);
     const lines = buildScanLogs(res);
     for (let i = 0; i < lines.length; i++) {
@@ -66,6 +71,52 @@ export default function Index() {
     }
     await sleep(320);
     if (scanSeq.current !== seq) return;
+
+    // stage 2 — deep scan: retrieve & dissect the live page
+    if (deepScan && /^https?:$/.test(parsed.url.protocol)) {
+      setLogs((prev) => [
+        ...prev,
+        { text: "sandbox relay .......... requesting live page", tone: "info" },
+      ]);
+      await sleep(280);
+      if (scanSeq.current !== seq) return;
+      try {
+        const page = await fetchPageHtml(res.href);
+        if (scanSeq.current !== seq) return;
+        setLogs((prev) => [
+          ...prev,
+          {
+            text: `payload received ....... ${page.bytes.toLocaleString()} bytes via ${page.via}`,
+            tone: "ok",
+          },
+        ]);
+
+        const { factors: contentFactors, report } = analyzePage(page.html, res.href);
+        applyPageFindings(res, contentFactors, {
+          ...report,
+          via: page.via,
+          bytes: page.bytes,
+          durationMs: page.durationMs,
+        });
+
+        await sleep(300);
+        if (scanSeq.current !== seq) return;
+        for (const line of summarizeFindings(contentFactors)) {
+          await sleep(260);
+          if (scanSeq.current !== seq) return;
+          setLogs((prev) => [...prev, line]);
+        }
+      } catch (error) {
+        if (scanSeq.current !== seq) return;
+        const reason = error instanceof Error ? error.message : "network error";
+        applyPageFindings(res, [], { status: "failed", reason });
+        setLogs((prev) => [
+          ...prev,
+          { text: `sandbox relay .......... ✗ ${reason}`, tone: "warn" },
+          { text: "continuing with structural verdict", tone: "info" },
+        ]);
+      }
+    }
 
     setResult(res);
     setPhase("done");
@@ -114,7 +165,7 @@ export default function Index() {
         {/* hero */}
         <section className="pb-10 pt-12 text-center sm:pt-16">
           <p className="text-[11px] font-semibold tracking-[0.34em] text-neon">
-            [ OFFLINE HEURISTIC ENGINE ]
+            [ SANDBOXED HEURISTIC ENGINE ]
           </p>
           <h1 className="mx-auto mt-4 max-w-2xl text-4xl font-extrabold leading-[1.08] tracking-tight text-fog sm:text-5xl">
             Scan the link.
@@ -122,11 +173,12 @@ export default function Index() {
             <span className="text-glow text-neon">Before it scans you.</span>
           </h1>
           <p className="mx-auto mt-5 max-w-xl text-sm leading-relaxed text-dim">
-            Paste any URL and PhishGuard dissects it for phishing fingerprints — brand spoofing,
-            homograph domains, bare IPs, sneaky redirects and more. Nothing ever leaves your device.
+            Paste any URL and PhishGuard dissects it for phishing fingerprints — then opens the live
+            page in a sandbox to hunt credential traps, hidden frames and redirect tricks. Nothing
+            is executed on your device.
           </p>
           <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
-            {["17 HEURISTIC CHECKS", "0 NETWORK CALLS", "100% LOCAL"].map((stat) => (
+            {["17 STRUCTURAL CHECKS", "+9 LIVE-PAGE CHECKS", "SANDBOXED ANALYSIS"].map((stat) => (
               <span
                 key={stat}
                 className="rounded-full border border-edge bg-panel px-3 py-1 text-[10px] font-medium tracking-[0.18em] text-dim"
@@ -140,6 +192,23 @@ export default function Index() {
         {/* scanner */}
         <section className="rounded-2xl border border-edge bg-panel p-4 shadow-[0_0_80px_-40px_rgba(0,255,156,0.4)] sm:p-6">
           <ScannerForm scanning={phase === "scanning"} error={formError} onScan={runScan} />
+
+          <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-edge bg-[#070d10] px-3.5 py-2.5">
+            <div>
+              <p className="text-[11px] font-bold tracking-[0.14em] text-fog">DEEP SCAN</p>
+              <p className="mt-0.5 text-[10px] leading-relaxed text-dim">
+                Fetch the live page through a public relay &amp; dissect its HTML for credential
+                traps.
+              </p>
+            </div>
+            <Switch
+              checked={deepScan}
+              onCheckedChange={setDeepScan}
+              aria-label="Toggle deep scan"
+              disabled={phase === "scanning"}
+            />
+          </div>
+
           <div className="mt-5">
             <TerminalOutput logs={logs} scanning={phase === "scanning"} />
           </div>
@@ -150,6 +219,7 @@ export default function Index() {
           <div ref={resultRef} className="scroll-mt-24 space-y-6 pt-12">
             <VerdictCard result={result} />
             <RiskBreakdown result={result} />
+            <SandboxPanel result={result} />
           </div>
         )}
 
@@ -168,9 +238,10 @@ export default function Index() {
 
       <footer className="mt-16 border-t border-edge/70 py-8">
         <p className="mx-auto max-w-2xl px-4 text-center text-[11px] leading-relaxed text-dim">
-          PhishGuard runs purely structural heuristics in your browser — no site is contacted and no
-          data leaves your device. A clean verdict is not a guarantee: always pair automated checks
-          with your own judgement.
+          Structural checks run fully offline. With Deep Scan enabled, the target page is fetched
+          once through a public relay and dissected in your browser — nothing is executed,
+          submitted, or stored beyond this device. A clean verdict is not a guarantee: always pair
+          automated checks with your own judgement.
         </p>
       </footer>
     </div>

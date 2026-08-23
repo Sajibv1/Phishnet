@@ -11,11 +11,24 @@ export interface RiskFactor {
   detail: string;
   severity: Severity;
   weight: number;
+  /** undefined = structural (URL-only) check; "content" = found in the live page HTML */
+  source?: "structure" | "content";
 }
 
 export interface PositiveSignal {
   title: string;
   detail: string;
+}
+
+export interface PageReport {
+  status: "fetched" | "failed";
+  via?: string;
+  bytes?: number;
+  durationMs?: number;
+  title?: string;
+  description?: string;
+  excerpt?: string;
+  reason?: string;
 }
 
 export interface ScanResult {
@@ -30,6 +43,7 @@ export interface ScanResult {
   factors: RiskFactor[];
   positives: PositiveSignal[];
   scannedAt: number;
+  page?: PageReport;
 }
 
 export interface LogLine {
@@ -90,7 +104,7 @@ const KEYWORDS = [
   "authenticate", "webscr", "recover", "restore", "kyc",
 ];
 
-const BRANDS: Array<{ key: string; name: string; official: string[] }> = [
+export const BRANDS: Array<{ key: string; name: string; official: string[] }> = [
   { key: "paypal", name: "PayPal", official: ["paypal.com"] },
   { key: "apple", name: "Apple", official: ["apple.com"] },
   { key: "icloud", name: "iCloud", official: ["icloud.com"] },
@@ -151,12 +165,12 @@ export function parseTarget(raw: string): ParsedTarget | null {
   return { url, hadExplicitProtocol };
 }
 
-function registrableDomain(host: string): string {
+export function registrableDomain(host: string): string {
   const parts = host.split(".");
   return parts.slice(-2).join(".");
 }
 
-function isOfficialDomain(official: string[], host: string, reg: string): boolean {
+export function isOfficialDomain(official: string[], host: string, reg: string): boolean {
   return official.some((o) => reg === o || host === o || host.endsWith(`.${o}`));
 }
 
@@ -404,8 +418,7 @@ export function analyze(target: ParsedTarget, rawInput: string): ScanResult {
   const score = Math.min(100, factors.reduce((sum, f) => sum + f.weight, 0));
   const finalScore = trusted ? Math.min(score, 5) : score;
 
-  const verdict: Verdict =
-    finalScore >= 70 ? "dangerous" : finalScore >= 45 ? "suspicious" : finalScore >= 22 ? "low" : "safe";
+  const verdict = verdictFor(finalScore);
 
   if (url.protocol === "https:") {
     positives.push({
@@ -476,4 +489,47 @@ export function buildScanLogs(r: ScanResult): LogLine[] {
       tone: r.verdict === "safe" ? "ok" : r.verdict === "low" ? "warn" : "bad",
     },
   ];
+}
+
+function verdictFor(score: number): Verdict {
+  return score >= 70 ? "dangerous" : score >= 45 ? "suspicious" : score >= 22 ? "low" : "safe";
+}
+
+const clampScore = (value: number) => Math.min(100, value);
+
+/**
+ * Merges live-page (content) findings into a finished structural scan and
+ * recomputes the final score/verdict. Mutates `result`.
+ */
+export function applyPageFindings(
+  result: ScanResult,
+  contentFactors: RiskFactor[],
+  page: PageReport,
+): void {
+  result.factors.push(...contentFactors);
+  result.page = page;
+
+  const structural = clampScore(
+    result.factors.filter((f) => f.source !== "content").reduce((sum, f) => sum + f.weight, 0),
+  );
+  const content = clampScore(
+    result.factors.filter((f) => f.source === "content").reduce((sum, f) => sum + f.weight, 0),
+  );
+  let total = Math.min(100, structural + content);
+
+  const trusted = TRUSTED_DOMAINS.has(registrableDomain(result.host));
+  const severeContent = contentFactors.some(
+    (f) => f.severity === "critical" || f.severity === "high",
+  );
+  if (trusted && !severeContent) total = Math.min(total, 5);
+
+  result.riskScore = total;
+  result.verdict = verdictFor(total);
+
+  if (page.status === "fetched" && contentFactors.length === 0) {
+    result.positives.push({
+      title: "Live page inspected — no content traps",
+      detail: "The retrieved HTML contained no credential-harvesting forms, redirects or injections.",
+    });
+  }
 }

@@ -49,8 +49,17 @@ export default function VerdictCard({ result }: { result: ScanResult }) {
       `PhishGuard report — ${new Date(result.scannedAt).toLocaleString()}`,
       `URL: ${result.inputUrl}`,
       `Threat score: ${result.riskScore}/100 (${meta.label})`,
+      ...(result.page?.status === "fetched"
+        ? [
+            "",
+            `Live page: “${result.page.title ?? "(untitled)"}” (${result.page.bytes ?? 0} bytes via ${result.page.via ?? "relay"})`,
+          ]
+        : []),
       "",
-      ...result.factors.map((f) => `- [${f.severity.toUpperCase()}] ${f.title}: ${f.detail}`),
+      ...result.factors.map(
+        (f) =>
+          `- [${f.severity.toUpperCase()}]${f.source === "content" ? " [page]" : ""} ${f.title}: ${f.detail}`,
+      ),
     ];
     try {
       await navigator.clipboard.writeText(lines.join("\n"));
