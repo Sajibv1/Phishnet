@@ -47,6 +47,11 @@ export default function RiskBreakdown({ result }: { result: ScanResult }) {
                         PAGE
                       </span>
                     )}
+                    {factor.source === "feed" && (
+                      <span className="rounded bg-tox/10 px-1.5 py-0.5 text-[9px] font-extrabold tracking-[0.18em] text-tox">
+                        FEED
+                      </span>
+                    )}
                     <span className="text-sm font-semibold text-fog">{factor.title}</span>
                     <span
                       className="ml-auto text-[11px] font-bold tabular-nums"

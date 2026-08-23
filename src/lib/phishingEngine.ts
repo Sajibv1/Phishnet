@@ -11,8 +11,8 @@ export interface RiskFactor {
   detail: string;
   severity: Severity;
   weight: number;
-  /** undefined = structural (URL-only) check; "content" = found in the live page HTML */
-  source?: "structure" | "content";
+  /** undefined = structural (URL-only) check; "content" = live-page HTML; "feed" = threat-database match */
+  source?: "structure" | "content" | "feed";
 }
 
 export interface PositiveSignal {
@@ -498,6 +498,36 @@ function verdictFor(score: number): Verdict {
 const clampScore = (value: number) => Math.min(100, value);
 
 /**
+ * Recomputes riskScore/verdict from all accumulated factors
+ * (structural + live-page content + threat-feed matches).
+ */
+export function rescore(result: ScanResult): void {
+  const weightOf = (source: RiskFactor["source"]) =>
+    result.factors
+      .filter((f) => f.source === source)
+      .reduce((sum, f) => sum + f.weight, 0);
+
+  const structural =
+    result.factors.filter((f) => !f.source).reduce((sum, f) => sum + f.weight, 0) +
+    weightOf("structure");
+  const total = Math.min(
+    100,
+    clampScore(structural) + clampScore(weightOf("content")) + clampScore(weightOf("feed")),
+  );
+
+  const trusted = TRUSTED_DOMAINS.has(registrableDomain(result.host));
+  const severe = result.factors.some(
+    (f) =>
+      (f.source === "content" || f.source === "feed") &&
+      (f.severity === "critical" || f.severity === "high"),
+  );
+  const finalScore = trusted && !severe ? Math.min(total, 5) : total;
+
+  result.riskScore = finalScore;
+  result.verdict = verdictFor(finalScore);
+}
+
+/**
  * Merges live-page (content) findings into a finished structural scan and
  * recomputes the final score/verdict. Mutates `result`.
  */
@@ -508,23 +538,7 @@ export function applyPageFindings(
 ): void {
   result.factors.push(...contentFactors);
   result.page = page;
-
-  const structural = clampScore(
-    result.factors.filter((f) => f.source !== "content").reduce((sum, f) => sum + f.weight, 0),
-  );
-  const content = clampScore(
-    result.factors.filter((f) => f.source === "content").reduce((sum, f) => sum + f.weight, 0),
-  );
-  let total = Math.min(100, structural + content);
-
-  const trusted = TRUSTED_DOMAINS.has(registrableDomain(result.host));
-  const severeContent = contentFactors.some(
-    (f) => f.severity === "critical" || f.severity === "high",
-  );
-  if (trusted && !severeContent) total = Math.min(total, 5);
-
-  result.riskScore = total;
-  result.verdict = verdictFor(total);
+  rescore(result);
 
   if (page.status === "fetched" && contentFactors.length === 0) {
     result.positives.push({

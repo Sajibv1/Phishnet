@@ -14,10 +14,12 @@ import {
   applyPageFindings,
   buildScanLogs,
   parseTarget,
+  rescore,
   type LogLine,
   type ScanResult,
 } from "@/lib/phishingEngine";
 import { analyzePage, fetchPageHtml, summarizeFindings } from "@/lib/pageScanner";
+import { checkPhishingDatabase, type FeedOutcome } from "@/lib/threatFeed";
 
 type Phase = "idle" | "scanning" | "done";
 
@@ -39,6 +41,7 @@ export default function Index() {
   const [result, setResult] = useState<ScanResult | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [deepScan, setDeepScan] = useState(true);
+  const [feedCheck, setFeedCheck] = useState(true);
   const { items: history, add: addScan, clear: clearHistory } = useScanHistory();
   const resultRef = useRef<HTMLDivElement>(null);
   const scanSeq = useRef(0);
@@ -73,7 +76,15 @@ export default function Index() {
     await sleep(320);
     if (scanSeq.current !== seq) return;
 
-    // stage 2 — deep scan: retrieve & dissect the live page
+    // stage 2a — kick off threat-feed sync in the background so it overlaps the deep scan
+    const feedPromise: Promise<FeedOutcome | null> =
+      feedCheck && /^https?:$/.test(parsed.url.protocol)
+        ? checkPhishingDatabase(res.href, res.host, (line) => {
+            if (scanSeq.current === seq) setLogs((prev) => [...prev, line]);
+          })
+        : Promise.resolve(null);
+
+    // stage 2b — deep scan: retrieve & dissect the live page
     if (deepScan && /^https?:$/.test(parsed.url.protocol)) {
       setLogs((prev) => [
         ...prev,
@@ -116,6 +127,50 @@ export default function Index() {
           { text: `sandbox relay .......... ✗ ${reason}`, tone: "warn" },
           { text: "continuing with structural verdict", tone: "info" },
         ]);
+      }
+    }
+
+    // stage 2c — report the threat-feed verdict
+    const feed = await feedPromise;
+    if (scanSeq.current !== seq) return;
+    if (feed) {
+      setLogs((prev) => [
+        ...prev,
+        { text: "threat feed ............. cross-checking Phishing.Database", tone: "info" },
+      ]);
+      await sleep(220);
+      if (scanSeq.current !== seq) return;
+
+      if ("error" in feed) {
+        setLogs((prev) => [
+          ...prev,
+          { text: `threat feed ............. ✗ ${feed.error}`, tone: "warn" },
+        ]);
+      } else {
+        setLogs((prev) => [
+          ...prev,
+          {
+            text: `threat feed ............. ${feed.entries.toLocaleString()} entries checked`,
+            tone: "info",
+          },
+        ]);
+        if (feed.factor) {
+          res.factors.push(feed.factor);
+          rescore(res);
+          setLogs((prev) => [
+            ...prev,
+            { text: "database match .......... ✗ LISTED — CONFIRMED PHISHING", tone: "bad" },
+          ]);
+        } else {
+          res.positives.push({
+            title: "Not listed in Phishing.Database",
+            detail: `Checked against ${feed.entries.toLocaleString()} known phishing URLs from the community feed.`,
+          });
+          setLogs((prev) => [
+            ...prev,
+            { text: "database match .......... ✓ not listed", tone: "ok" },
+          ]);
+        }
       }
     }
 
@@ -174,19 +229,21 @@ export default function Index() {
             <span className="text-glow text-neon">Before it scans you.</span>
           </h1>
           <p className="mx-auto mt-5 max-w-xl text-sm leading-relaxed text-dim">
-            Paste any URL and PhishGuard dissects it for phishing fingerprints — then opens the live
-            page in a sandbox to hunt credential traps, hidden frames and redirect tricks. Nothing
-            is executed on your device.
+            Paste any URL and PhishGuard dissects it for phishing fingerprints, opens the live page
+            in a sandbox to hunt credential traps, and cross-checks the community Phishing.Database
+            feed. Nothing is executed on your device.
           </p>
           <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
-            {["17 STRUCTURAL CHECKS", "+9 LIVE-PAGE CHECKS", "SANDBOXED ANALYSIS"].map((stat) => (
-              <span
-                key={stat}
-                className="rounded-full border border-edge bg-panel px-3 py-1 text-[10px] font-medium tracking-[0.18em] text-dim"
-              >
-                {stat}
-              </span>
-            ))}
+            {["17 STRUCTURAL CHECKS", "+9 LIVE-PAGE CHECKS", "PHISHING.DATABASE FEED"].map(
+              (stat) => (
+                <span
+                  key={stat}
+                  className="rounded-full border border-edge bg-panel px-3 py-1 text-[10px] font-medium tracking-[0.18em] text-dim"
+                >
+                  {stat}
+                </span>
+              ),
+            )}
           </div>
         </section>
 
@@ -194,20 +251,37 @@ export default function Index() {
         <section className="rounded-2xl border border-edge bg-panel p-4 shadow-[0_0_80px_-40px_rgba(0,255,156,0.4)] sm:p-6">
           <ScannerForm scanning={phase === "scanning"} error={formError} onScan={runScan} />
 
-          <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-edge bg-[#070d10] px-3.5 py-2.5">
-            <div>
-              <p className="text-[11px] font-bold tracking-[0.14em] text-fog">DEEP SCAN</p>
-              <p className="mt-0.5 text-[10px] leading-relaxed text-dim">
-                Fetch the live page through a public relay &amp; dissect its HTML for credential
-                traps.
-              </p>
+          <div className="mt-4 space-y-2">
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-edge bg-[#070d10] px-3.5 py-2.5">
+              <div>
+                <p className="text-[11px] font-bold tracking-[0.14em] text-fog">DEEP SCAN</p>
+                <p className="mt-0.5 text-[10px] leading-relaxed text-dim">
+                  Fetch the live page through a public relay &amp; dissect its HTML for credential
+                  traps.
+                </p>
+              </div>
+              <Switch
+                checked={deepScan}
+                onCheckedChange={setDeepScan}
+                aria-label="Toggle deep scan"
+                disabled={phase === "scanning"}
+              />
             </div>
-            <Switch
-              checked={deepScan}
-              onCheckedChange={setDeepScan}
-              aria-label="Toggle deep scan"
-              disabled={phase === "scanning"}
-            />
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-edge bg-[#070d10] px-3.5 py-2.5">
+              <div>
+                <p className="text-[11px] font-bold tracking-[0.14em] text-fog">THREAT FEED</p>
+                <p className="mt-0.5 text-[10px] leading-relaxed text-dim">
+                  Cross-check against the community Phishing.Database feed — synced once per
+                  session.
+                </p>
+              </div>
+              <Switch
+                checked={feedCheck}
+                onCheckedChange={setFeedCheck}
+                aria-label="Toggle threat feed check"
+                disabled={phase === "scanning"}
+              />
+            </div>
           </div>
 
           <div className="mt-5">
@@ -241,8 +315,9 @@ export default function Index() {
         <p className="mx-auto max-w-2xl px-4 text-center text-[11px] leading-relaxed text-dim">
           Structural checks run fully offline. With Deep Scan enabled, the target page is fetched
           once through a public relay and dissected in your browser — nothing is executed,
-          submitted, or stored beyond this device. A clean verdict is not a guarantee: always pair
-          automated checks with your own judgement.
+          submitted, or stored beyond this device. The optional threat feed downloads the community
+          Phishing.Database lists once per session and matches locally. A clean verdict is not a
+          guarantee: always pair automated checks with your own judgement.
         </p>
       </footer>
     </div>
