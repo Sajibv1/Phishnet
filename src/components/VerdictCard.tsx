@@ -58,7 +58,7 @@ export default function VerdictCard({ result }: { result: ScanResult }) {
       "",
       ...result.factors.map(
         (f) =>
-          `- [${f.severity.toUpperCase()}]${f.source === "content" ? " [page]" : ""} ${f.title}: ${f.detail}`,
+          `- [${f.severity.toUpperCase()}]${f.source === "content" ? " [page]" : f.source === "feed" ? " [feed]" : ""} ${f.title}: ${f.detail}`,
       ),
     ];
     try {
